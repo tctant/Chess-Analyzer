@@ -1,0 +1,35 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Backend",
+            "type": "shell",
+            "command": ".\\run.ps1",
+            "isBackground": true,
+            "presentation": {
+                "panel": "dedicated",
+                "group": "servers",
+                "reveal": "always"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Frontend",
+            "type": "shell",
+            "command": ".\\run-frontend.ps1",
+            "isBackground": true,
+            "presentation": {
+                "panel": "dedicated",
+                "group": "servers",
+                "reveal": "always"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Start All",
+            "dependsOn": ["Backend", "Frontend"],
+            "dependsOrder": "parallel",
+            "problemMatcher": []
+        }
+    ]
+}

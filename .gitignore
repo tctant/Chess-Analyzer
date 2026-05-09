@@ -1,0 +1,24 @@
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# database (sqlite, gets regenerated on sync)
+*.db
+*.db-journal
+chess_data.db
+
+# editor / os
+.DS_Store
+.idea/
+*.swp
+
+# node (frontend has its own .gitignore but doesnt hurt to repeat here)
+node_modules/
+dist/
+.vite/
+
+# env vars - never commit these
+.env
+.env.local

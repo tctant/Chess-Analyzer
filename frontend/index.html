@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%E2%99%9E%3C/text%3E%3C/svg%3E" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Chess Analyzer</title>
+        <meta name="description" content="Personal Chess.com analytics dashboard with opening performance, rating progression, time-of-day breakdowns, and per-game engine analysis." />
+
+        <meta property="og:title" content="Chess Analyzer" />
+        <meta property="og:description" content="Personal Chess.com analytics dashboard." />
+        <meta property="og:type" content="website" />
+
+        <!-- preconnect runs the dns + tls handshake in parallel with html parse,
+             saves ~150ms on cold visits -->
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+        <!-- chessground css doesnt ship with the npm package, has to come from
+             the lichess cdn. brown is the board, cburnett is the piece set -->
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/lichess-org/chessground@v9.2.1/assets/chessground.base.css" />
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/lichess-org/chessground@v9.2.1/assets/chessground.brown.css" />
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/lichess-org/chessground@v9.2.1/assets/chessground.cburnett.css" />
+    </head>
+    <body>
+        <div id="root"></div>
+        <script type="module" src="/src/main.jsx"></script>
+    </body>
+</html>
