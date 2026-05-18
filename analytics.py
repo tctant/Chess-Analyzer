@@ -460,13 +460,29 @@ def search_games(
     extra += result_clause
 
     # count query first - the frontend needs the total for pagination
+    # count + win/draw breakdown in one pass. frontend uses this for the
+    # head-to-head summary line when an opponent filter is active.
+    _draws_list = ",".join(f"'{r}'" for r in DRAW_RESULTS)
     count_sql = f"""
-        SELECT COUNT(*) AS n
+        SELECT
+            COUNT(*) AS n,
+            SUM(CASE WHEN
+                (white_username = :user AND white_result = 'win')
+                OR (black_username = :user AND black_result = 'win')
+            THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN
+                (white_username = :user AND white_result IN ({_draws_list}))
+                OR (black_username = :user AND black_result IN ({_draws_list}))
+            THEN 1 ELSE 0 END) AS draws
         FROM games
         WHERE {_USER_IN_GAME}
           {extra}
     """
-    total = conn.execute(count_sql, params).fetchone()["n"]
+    crow   = conn.execute(count_sql, params).fetchone()
+    total  = crow["n"]
+    wins   = crow["wins"]  or 0
+    draws  = crow["draws"] or 0
+    losses = total - wins - draws
 
     sql = f"""
         SELECT
@@ -501,7 +517,13 @@ def search_games(
             "opponent":     opp,
             "opp_rating":   opp_rating,
         })
-    return {"total": total, "limit": limit, "offset": offset, "rows": rows}
+    return {
+        "total":   total,
+        "limit":   limit,
+        "offset":  offset,
+        "summary": {"wins": wins, "draws": draws, "losses": losses},
+        "rows":    rows,
+    }
 
 
 def _print_report(db_path: str, username: str) -> None:
