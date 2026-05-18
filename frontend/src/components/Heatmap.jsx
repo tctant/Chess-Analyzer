@@ -35,7 +35,7 @@ function formatHourLong(h) {
 }
 
 
-export function Heatmap({ username, tzOffsetHours, initial }) {
+export function Heatmap({ username, tzOffsetHours, tzLabel, initial }) {
 
     var [range, setRange]     = useState('all');
     var [cells, setCells]     = useState(initial || []);
@@ -77,7 +77,7 @@ export function Heatmap({ username, tzOffsetHours, initial }) {
                         value={range}
                         onChange={onSelectFilter}
                     />
-                    <span className="subtitle">Times shown in UTC</span>
+                    <span className="subtitle">Times shown in {tzLabel || 'UTC'}</span>
                 </div>
             </div>
             <div style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.15s' }}>
@@ -134,7 +134,7 @@ function Row({ day, dayIdx, grid, max }) {
                         key={`${dayIdx}-${hour}`}
                         className="cell"
                         style={{ '--intensity': intensity }}
-                        title={`${day} ${formatHourLong(hour)} \u00b7 ${games} games`}
+                        title={`${day} ${formatHourLong(hour)} · ${games} games`}
                     />
                 );
             })}

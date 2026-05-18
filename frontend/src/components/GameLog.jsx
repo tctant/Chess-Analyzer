@@ -47,8 +47,6 @@ export function GameLog({ username }) {
     var [analyzeGame, setAnalyzeGame]   = useState(null);
     var [analyzeError, setAnalyzeError] = useState(null);
 
-    // any filter change resets to page 0. opponent gets debounced so we
-    // dont hammer the api on every keystroke.
     var debouncedOpponent = useDebounced(opponent, 300);
 
     useEffect(() => { setPage(0); }, [debouncedOpponent, color, result, timeClass]);
@@ -83,7 +81,8 @@ export function GameLog({ username }) {
         }
     }
 
-    var totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
+    var totalPages      = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
+    var hasActiveFilter = !!(debouncedOpponent || color || result || timeClass);
 
     return (
         <>
@@ -109,6 +108,14 @@ export function GameLog({ username }) {
                 <Select value={result}    onChange={setResult}    options={RESULT_OPTIONS}     label="Result" />
                 <Select value={timeClass} onChange={setTimeClass} options={TIME_CLASS_OPTIONS} label="Time" />
             </div>
+
+            {data && hasActiveFilter && data.summary && data.total > 0 && (
+                <FilterSummary
+                    summary={data.summary}
+                    total={data.total}
+                    opponent={debouncedOpponent}
+                />
+            )}
 
             {error        && <div className="games-list-status">Couldn't load: {error}</div>}
             {analyzeError && <div className="games-list-status">Couldn't open game: {analyzeError}</div>}
@@ -140,6 +147,35 @@ export function GameLog({ username }) {
                 <AnalysisBoard game={analyzeGame} onClose={() => setAnalyzeGame(null)} />
             )}
         </>
+    );
+}
+
+
+// shown above the games list when a filter is active. for opponent searches
+// this doubles as a head-to-head record.
+function FilterSummary({ summary, total, opponent }) {
+
+    var wins    = summary.wins;
+    var draws   = summary.draws;
+    var losses  = summary.losses;
+    var winRate = total ? ((wins / total) * 100).toFixed(1) : '0.0';
+
+    var lead = opponent
+        ? <>vs <strong>{opponent}</strong></>
+        : <>Filter result</>;
+
+    return (
+        <div className="filter-summary">
+            <span className="filter-summary-lead">{lead}</span>
+            <span className="filter-summary-record">
+                <span className="record-win">{wins.toLocaleString()}W</span>
+                <span className="record-sep">-</span>
+                <span className="record-draw">{draws.toLocaleString()}D</span>
+                <span className="record-sep">-</span>
+                <span className="record-loss">{losses.toLocaleString()}L</span>
+            </span>
+            <span className="filter-summary-rate">{winRate}% win rate</span>
+        </div>
     );
 }
 
@@ -189,30 +225,63 @@ function Select({ value, onChange, options, label }) {
 
 function Pager({ page, totalPages, onChange, disabled }) {
 
+    var [jumpInput, setJumpInput] = useState('');
+
+    function onJump(e) {
+        e.preventDefault();
+        var n = parseInt(jumpInput, 10);
+        if (Number.isNaN(n)) { return; }
+        var clamped = Math.max(1, Math.min(totalPages, n));
+        onChange(clamped - 1);
+        setJumpInput('');
+    }
+
     return (
         <div className="pager">
+            <button
+                onClick={() => onChange(0)}
+                disabled={disabled || page === 0}
+                title="First page (newest games)"
+            >
+                ⏮ First
+            </button>
             <button
                 onClick={() => onChange(page - 1)}
                 disabled={disabled || page === 0}
             >
                 ← Prev
             </button>
-            <span className="pager-status">
-                Page {page + 1} of {totalPages.toLocaleString()}
-            </span>
+            <form onSubmit={onJump} className="pager-jump">
+                <span>Page</span>
+                <input
+                    type="number"
+                    min={1}
+                    max={totalPages}
+                    value={jumpInput}
+                    onChange={e => setJumpInput(e.target.value)}
+                    placeholder={String(page + 1)}
+                    disabled={disabled}
+                />
+                <span>of {totalPages.toLocaleString()}</span>
+            </form>
             <button
                 onClick={() => onChange(page + 1)}
                 disabled={disabled || page >= totalPages - 1}
             >
                 Next →
             </button>
+            <button
+                onClick={() => onChange(totalPages - 1)}
+                disabled={disabled || page >= totalPages - 1}
+                title="Last page (oldest games)"
+            >
+                Last ⏭
+            </button>
         </div>
     );
 }
 
 
-// simple debounce - returns the value only after `delay` ms of no change.
-// used so the opponent search box doesnt fire a request per keystroke.
 function useDebounced(value, delay) {
 
     var [out, setOut] = useState(value);

@@ -20,7 +20,9 @@ import { ErrorBoundary }      from './components/ErrorBoundary';
 import { DashboardSkeleton }  from './components/DashboardSkeleton';
 
 
-var TZ_OFFSET_HOURS = 0;
+// the user whose data was pre-synced at build time. landing on the root
+// redirects to their dashboard so visitors see something immediately.
+var DEFAULT_USERNAME = 'MooMooTNT';
 
 
 function useTheme() {
@@ -38,6 +40,44 @@ function useTheme() {
     }, [theme]);
 
     return [theme, () => setTheme(t => t === 'dark' ? 'light' : 'dark')];
+}
+
+
+// 'local' or 'utc'. local is auto-detected from the browser. persisted to
+// localStorage so the choice sticks across reloads.
+function useTimezone() {
+
+    var [mode, setMode] = useState(() => {
+        if (typeof window === 'undefined') { return 'local'; }
+        var stored = window.localStorage.getItem('tz_mode');
+        return stored === 'utc' ? 'utc' : 'local';
+    });
+
+    useEffect(() => {
+        if (typeof window !== 'undefined') {
+            window.localStorage.setItem('tz_mode', mode);
+        }
+    }, [mode]);
+
+    var offsetHours = mode === 'utc'
+        ? 0
+        : -new Date().getTimezoneOffset() / 60;
+
+    return { mode, setMode, offsetHours };
+}
+
+
+function tzLabel(mode) {
+
+    if (mode === 'utc') { return 'UTC'; }
+    // 'America/Phoenix' -> 'Phoenix'
+    try {
+        var zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        var parts = zone.split('/');
+        return parts[parts.length - 1].replace(/_/g, ' ');
+    } catch (e) {
+        return 'Local';
+    }
 }
 
 
@@ -79,70 +119,32 @@ function ThemeToggle({ theme, onToggle }) {
 }
 
 
+function TimezoneToggle({ mode, onChange }) {
+
+    return (
+        <select
+            className="tz-toggle"
+            value={mode}
+            onChange={e => onChange(e.target.value)}
+            title="Timezone for the heatmap and hour-of-day charts"
+        >
+            <option value="local">{tzLabel('local')}</option>
+            <option value="utc">UTC</option>
+        </select>
+    );
+}
+
+
 export default function App() {
 
     return (
         <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
             <Routes>
                 <Route path="/u/:username" element={<UserPage />} />
-                <Route path="/"            element={<LandingPage />} />
-                <Route path="*"            element={<Navigate to="/" replace />} />
+                <Route path="/" element={<Navigate to={`/u/${DEFAULT_USERNAME}`} replace />} />
+                <Route path="*" element={<Navigate to={`/u/${DEFAULT_USERNAME}`} replace />} />
             </Routes>
         </BrowserRouter>
-    );
-}
-
-
-function LandingPage() {
-
-    var navigate               = useNavigate();
-    var [theme, toggleTheme]   = useTheme();
-    var [input, setInput]      = useState('');
-
-    var onSubmit = e => {
-        e.preventDefault();
-        var trimmed = input.trim();
-        if (trimmed) { navigate(`/u/${trimmed}`); }
-    };
-
-    return (
-        <div className="app">
-            <div className="app-header">
-                <div>
-                    <div className="eyebrow">Chess.com analytics</div>
-                    <h1>Chess Analyzer</h1>
-                    <div className="meta">
-                        Personal performance dashboard for any Chess.com player.
-                    </div>
-                </div>
-                <div className="header-right">
-                    <ThemeToggle theme={theme} onToggle={toggleTheme} />
-                </div>
-            </div>
-
-            <form className="username-form" onSubmit={onSubmit}>
-                <input
-                    type="text"
-                    value={input}
-                    onChange={e => setInput(e.target.value)}
-                    placeholder="Enter a Chess.com username"
-                    autoComplete="off"
-                    autoFocus
-                />
-                <button type="submit" disabled={!input.trim()}>
-                    View dashboard
-                </button>
-            </form>
-
-            <div className="status">
-                Try a username like <a href="/u/MagnusCarlsen">MagnusCarlsen</a> or{' '}
-                <a href="/u/Hikaru">Hikaru</a>.
-                <div style={{ marginTop: 8, fontSize: 13 }}>
-                    New usernames will sync from Chess.com automatically. The first
-                    sync takes a couple minutes for active players.
-                </div>
-            </div>
-        </div>
     );
 }
 
@@ -152,13 +154,15 @@ function UserPage() {
     var { username }         = useParams();
     var navigate             = useNavigate();
     var [theme, toggleTheme] = useTheme();
+    var tz                   = useTimezone();
 
     var [input, setInput]     = useState(username);
     var [summary, setSummary] = useState(null);
     var [error, setError]     = useState(null);
     var [loading, setLoading] = useState(false);
 
-    // refetch when the route's :username changes
+    // refetch when the route's :username changes, or when the user flips
+    // the timezone toggle (which affects the heatmap and hour data)
     useEffect(() => {
 
         if (!username) { return; }
@@ -166,12 +170,12 @@ function UserPage() {
         var cancelled = false;
         setLoading(true);
         setError(null);
-        fetchSummary(username, TZ_OFFSET_HOURS)
+        fetchSummary(username, tz.offsetHours)
             .then(data => { if (!cancelled) { setSummary(data); } })
             .catch(err => { if (!cancelled) { setError(err.message); setSummary(null); } })
             .finally(()  => { if (!cancelled) { setLoading(false); } });
         return () => { cancelled = true; };
-    }, [username]);
+    }, [username, tz.offsetHours]);
 
     var onSubmit = e => {
         e.preventDefault();
@@ -186,7 +190,7 @@ function UserPage() {
         setSummary(null);
         setError(null);
         setLoading(true);
-        fetchSummary(username, TZ_OFFSET_HOURS)
+        fetchSummary(username, tz.offsetHours)
             .then(setSummary)
             .catch(e => setError(e.message))
             .finally(() => setLoading(false));
@@ -207,6 +211,7 @@ function UserPage() {
                     )}
                 </div>
                 <div className="header-right">
+                    <TimezoneToggle mode={tz.mode} onChange={tz.setMode} />
                     <ThemeToggle theme={theme} onToggle={toggleTheme} />
                 </div>
             </div>
@@ -230,6 +235,7 @@ function UserPage() {
                     <strong>Couldn't load.</strong> {error}
                     <div style={{ marginTop: 8, fontSize: 13 }}>
                         Click <strong>Sync</strong> above to pull this user's games from Chess.com.
+                        The first sync takes 2-3 minutes for active players.
                     </div>
                 </div>
             )}
@@ -262,7 +268,7 @@ function UserPage() {
                         <div className="card">
                             <div className="card-header">
                                 <h2>Win rate by hour of day</h2>
-                                <span className="subtitle">Min 20 games per hour</span>
+                                <span className="subtitle">Min 20 games per hour · {tzLabel(tz.mode)}</span>
                             </div>
                             <HourPerformance data={summary.performance_by_hour} />
                         </div>
@@ -291,7 +297,8 @@ function UserPage() {
                         <div className="card">
                             <Heatmap
                                 username={username}
-                                tzOffsetHours={TZ_OFFSET_HOURS}
+                                tzOffsetHours={tz.offsetHours}
+                                tzLabel={tzLabel(tz.mode)}
                                 initial={summary.activity_heatmap}
                             />
                         </div>

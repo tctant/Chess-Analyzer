@@ -94,9 +94,9 @@ export function SyncButton({ username, onComplete }) {
 
     var running = job && (job.state === 'syncing' || job.state === 'queued');
     var label   = !running                  ? 'Sync'
-                : job.state === 'queued'    ? 'Queued\u2026'
-                : job.state === 'syncing'   ? 'Syncing\u2026'
-                : 'Working\u2026';
+                : job.state === 'queued'    ? 'Queued…'
+                : job.state === 'syncing'   ? 'Syncing…'
+                : 'Working…';
 
     return (
         <div className="sync-button-wrap">
@@ -105,7 +105,7 @@ export function SyncButton({ username, onComplete }) {
                 className="sync-button"
                 onClick={onClick}
                 disabled={running || !username}
-                title="Pull latest games from Chess.com"
+                title="Pull latest games from Chess.com. First sync for an active player takes 2-3 minutes."
             >
                 {label}
             </button>
@@ -115,6 +115,9 @@ export function SyncButton({ username, onComplete }) {
                         ? `Couldn't start: ${error}`
                         : job?.message || ''}
                 </div>
+            )}
+            {!running && !job && !error && (
+                <div className="sync-hint">First sync ~2-3 min</div>
             )}
         </div>
     );
