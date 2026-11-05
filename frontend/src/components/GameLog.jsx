@@ -4,7 +4,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { searchGames, fetchGameByUrl } from '../api';
-import { AnalysisBoard } from './AnalysisBoard';
+import { AnalysisBoard } from './LazyAnalysisBoard';
 
 
 var TIME_CLASS_OPTIONS = [

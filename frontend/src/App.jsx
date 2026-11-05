@@ -3,7 +3,7 @@
 // piece it cares about. error boundaries wrap every card so one bad chart
 // cant blank the whole page.
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useParams, useLocation, Navigate, NavLink, Link } from 'react-router-dom';
 
 import { fetchSummary }       from './api';
@@ -18,39 +18,16 @@ import { GameLog }            from './components/GameLog';
 import { SyncButton }         from './components/SyncButton';
 import { ErrorBoundary }      from './components/ErrorBoundary';
 import { DashboardSkeleton }  from './components/DashboardSkeleton';
-import { PositionExplorer }   from './components/PositionExplorer';
+
+
+// the explorer pulls in chessground + chess.js + the analysis modal, none
+// of which the dashboard needs on first paint, so it gets its own chunk
+var PositionExplorer = lazy(() => import('./components/PositionExplorer').then(m => ({ default: m.PositionExplorer })));
 
 
 // the user whose data was pre-synced at build time. landing on the root
 // redirects to their dashboard so visitors see something immediately.
 var DEFAULT_USERNAME = 'MooMooTNT';
-
-
-// board themes, same idea as chess.com / lichess board settings. the pick
-// also drives the accent color across the whole site so it doesnt feel
-// like a board pasted onto a generic dashboard.
-var BOARD_THEMES = [
-    { key: 'green', label: 'Green', light: '#ebecd0', dark: '#739552' },
-    { key: 'brown', label: 'Brown', light: '#f0d9b5', dark: '#b58863' },
-    { key: 'blue',  label: 'Blue',  light: '#dee3e6', dark: '#8ca2ad' }
-];
-
-
-function useBoardTheme() {
-
-    var [board, setBoard] = useState(() => {
-        if (typeof window === 'undefined') { return 'green'; }
-        var stored = window.localStorage.getItem('board_theme');
-        return BOARD_THEMES.some(t => t.key === stored) ? stored : 'green';
-    });
-
-    useEffect(() => {
-        document.documentElement.dataset.board = board;
-        window.localStorage.setItem('board_theme', board);
-    }, [board]);
-
-    return [board, setBoard];
-}
 
 
 // 'local' or 'utc'. local is auto-detected from the browser. persisted to
@@ -91,27 +68,6 @@ function tzLabel(mode) {
 }
 
 
-function BoardThemePicker({ value, onChange }) {
-
-    return (
-        <div className="board-picker" role="radiogroup" aria-label="Board theme">
-            {BOARD_THEMES.map(t => (
-                <button
-                    key={t.key}
-                    role="radio"
-                    aria-checked={value === t.key}
-                    className={value === t.key ? 'active' : ''}
-                    onClick={() => onChange(t.key)}
-                    title={`${t.label} board`}
-                >
-                    <span style={{ background: `linear-gradient(135deg, ${t.light} 50%, ${t.dark} 50%)` }} />
-                </button>
-            ))}
-        </div>
-    );
-}
-
-
 function TimezoneToggle({ mode, onChange }) {
 
     return (
@@ -147,7 +103,6 @@ function UserPage() {
     var { username }         = useParams();
     var navigate             = useNavigate();
     var location             = useLocation();
-    var [board, setBoard]    = useBoardTheme();
     var tz                   = useTimezone();
     var view                 = location.pathname.endsWith('/explorer') ? 'explorer' : 'dashboard';
 
@@ -208,7 +163,6 @@ function UserPage() {
                     <NavLink to={`/u/${username}/explorer`}>Position explorer</NavLink>
                 </nav>
                 <div className="topbar-right">
-                    <BoardThemePicker value={board} onChange={setBoard} />
                     <TimezoneToggle mode={tz.mode} onChange={tz.setMode} />
                 </div>
             </div>
@@ -257,7 +211,9 @@ function UserPage() {
 
             {view === 'explorer' && !error && summary && (
                 <ErrorBoundary label="Couldn't render position explorer">
-                    <PositionExplorer key={username} username={username} />
+                    <Suspense fallback={<div className="pe-note">Loading board…</div>}>
+                        <PositionExplorer key={username} username={username} />
+                    </Suspense>
                 </ErrorBoundary>
             )}
 

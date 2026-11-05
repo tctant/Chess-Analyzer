@@ -3,7 +3,7 @@
 // what got played next. the line lives in the url (?line=e2e4,e7e5) so a
 // position can be linked straight to.
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Chess } from 'chess.js';
 import Chessground from '@react-chess/chessground';
@@ -25,6 +25,52 @@ var TIME_CLASSES = [
     { key: 'rapid',  label: 'Rapid' },
     { key: 'daily',  label: 'Daily' }
 ];
+
+
+// promise cache shared across the page. the server caches too, but this
+// skips the round trip entirely - going back a move or replaying a line
+// you just looked at is instant.
+var positionCache = new Map();
+var CACHE_MAX     = 400;
+
+
+function loadPosition(username, fen, color, timeClass) {
+
+    var key = `${username}|${fen}|${color}|${timeClass}`;
+    if (positionCache.has(key)) { return positionCache.get(key); }
+
+    var p = fetchPosition(username, fen, { color, timeClass })
+        .then(d => {
+            // dont keep "still indexing" responses around, the next poll needs a real request
+            if (d.status !== 'ready') { positionCache.delete(key); }
+            return d;
+        })
+        .catch(e => {
+            positionCache.delete(key);
+            throw e;
+        });
+
+    if (positionCache.size >= CACHE_MAX) {
+        positionCache.delete(positionCache.keys().next().value);
+    }
+    positionCache.set(key, p);
+    return p;
+}
+
+
+// warm the cache for the likeliest next clicks so they render with no wait
+function prefetchContinuations(username, fen, moves, color, timeClass) {
+
+    for (var m of moves.slice(0, 3)) {
+        var c = new Chess(fen);
+        try {
+            c.move({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), promotion: m.uci[4] });
+        } catch {
+            continue;
+        }
+        loadPosition(username, c.fen(), color, timeClass).catch(() => {});
+    }
+}
 
 
 function legalDests(chess) {
@@ -130,6 +176,7 @@ export function PositionExplorer({ username }) {
     var [loading, setLoading] = useState(false);
     var [error, setError]     = useState(null);
     var [pollTick, setPollTick] = useState(0);
+    var lastStatus = useRef(null);
 
     var [analyzeGame, setAnalyzeGame] = useState(null);
 
@@ -161,16 +208,28 @@ export function PositionExplorer({ username }) {
         var timer     = null;
         setLoading(true);
         setError(null);
-        fetchPosition(username, fen, { color, timeClass })
+        loadPosition(username, fen, color, timeClass)
             .then(d => {
                 if (cancelled) { return; }
+                lastStatus.current = d.status;
                 setData({ ...d, fen });
                 // first visit builds the index server side, poll until its done
                 if (d.status === 'indexing') {
                     timer = setTimeout(() => setPollTick(t => t + 1), 2000);
+                } else {
+                    prefetchContinuations(username, fen, d.moves, color, timeClass);
                 }
             })
-            .catch(e => { if (!cancelled) { setError(e.message); } })
+            .catch(e => {
+                if (cancelled) { return; }
+                // a free-tier backend can drop a request while its busy indexing,
+                // keep polling instead of parking on an error
+                if (lastStatus.current === 'indexing') {
+                    timer = setTimeout(() => setPollTick(t => t + 1), 3000);
+                    return;
+                }
+                setError(e.message);
+            })
             .finally(() => { if (!cancelled) { setLoading(false); } });
         return () => {
             cancelled = true;

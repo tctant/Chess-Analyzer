@@ -4,7 +4,7 @@
 
 import { useState, useEffect, Fragment } from 'react';
 import { fetchOpenings, fetchGames } from '../api';
-import { AnalysisBoard } from './AnalysisBoard';
+import { AnalysisBoard } from './LazyAnalysisBoard';
 
 
 // win rate thresholds for tinting the win-rate pill on each row
