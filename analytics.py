@@ -44,6 +44,33 @@ def _connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+# covers every column the dashboard panels read, so sqlite answers them
+# from the index alone and never touches the table rows (which carry the
+# multi-kb pgn). roughly halves summary time on a 9k game account.
+STATS_INDEX_SQL = """
+    CREATE INDEX IF NOT EXISTS idx_games_stats ON games (
+        username, end_time, time_class, rated, eco,
+        white_username, white_rating, white_result,
+        black_username, black_rating, black_result
+    )
+"""
+
+
+def tune_db(conn: sqlite3.Connection) -> None:
+
+    # wal lets the dashboard keep reading while a sync or the position
+    # indexer is writing. in the default journal mode a big write batch
+    # takes an exclusive lock and readers fail with "database is locked".
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    has_games = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='games'"
+    ).fetchone()
+    if has_games:
+        conn.execute(STATS_INDEX_SQL)
+        conn.commit()
+
+
 def _ensure_row_factory(conn: sqlite3.Connection) -> None:
 
     # public functions accept any sqlite3.Connection. set Row factory
@@ -52,7 +79,9 @@ def _ensure_row_factory(conn: sqlite3.Connection) -> None:
 
 
 # sql fragments reused below, all queries take :user as a named parameter
-_USER_IN_GAME = "(white_username = :user OR black_username = :user)"
+# the username = :user part is what lets sqlite use the per-user index.
+# without it every panel was a full table scan over every row's pgn pages.
+_USER_IN_GAME = "(username = :user AND (white_username = :user OR black_username = :user))"
 _MY_RESULT = (
     "CASE WHEN white_username = :user "
     "THEN white_result ELSE black_result END"
@@ -85,13 +114,19 @@ def rating_progression(
           AND time_class IS NOT NULL
         ORDER BY end_time
     """
+    # one point per day per time class (the last rating that day). the
+    # chart downsamples to ~200 points anyway, so shipping every game was
+    # most of the summary payload for nothing.
     series: dict[str, list[dict[str, int]]] = {}
     for row in conn.execute(sql, {"user": user}):
         if row["rating"] is None:
             continue
-        series.setdefault(row["time_class"], []).append(
-            {"t": row["end_time"], "rating": row["rating"]}
-        )
+        points = series.setdefault(row["time_class"], [])
+        day    = row["end_time"] // 86400
+        if points and points[-1]["t"] // 86400 == day:
+            points[-1] = {"t": row["end_time"], "rating": row["rating"]}
+        else:
+            points.append({"t": row["end_time"], "rating": row["rating"]})
     return series
 
 

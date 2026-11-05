@@ -13,6 +13,7 @@ import threading
 import time
 import traceback
 
+import analytics
 import fetch_games
 import position_index
 
@@ -75,9 +76,10 @@ def _run(username, db_path):
 
     try:
         _set(username, state="syncing", message="Fetching games from Chess.com")
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, timeout=30)
         try:
             fetch_games.sync_user(username, conn)
+            analytics.tune_db(conn)
 
             # keep the position explorer in step with new games. incremental,
             # so after the first run this only touches what just came in
@@ -139,7 +141,7 @@ def _run_index(username, db_path):
             _INDEX_JOBS[username].update(done=done, total=total)
 
     try:
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, timeout=30)
         try:
             position_index.index_user(conn, username, on_progress=progress)
         finally:

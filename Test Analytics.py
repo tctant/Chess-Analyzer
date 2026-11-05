@@ -116,7 +116,9 @@ print("[OK] performance_by_time_class")
 # rating_progression
 prog = an.rating_progression(conn, USER)
 assert set(prog.keys()) == {"blitz", "rapid", "bullet"}
-assert len(prog["blitz"]) == 5
+# collapsed to one point per day, keeping that day's last rating
+days = [p["t"] // 86400 for p in prog["blitz"]]
+assert 1 <= len(prog["blitz"]) <= 5 and len(days) == len(set(days))
 assert prog["blitz"] == sorted(prog["blitz"], key=lambda p: p["t"]), "should be time-sorted"
 assert prog["blitz"][-1]["rating"] == 1530, prog["blitz"][-1]
 print("[OK] rating_progression")

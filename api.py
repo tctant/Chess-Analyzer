@@ -28,6 +28,7 @@ from typing import Any
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 import analytics
 import position_index
@@ -50,11 +51,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# summary json is ~150kb of mostly repeated keys, gzips down to ~15kb
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+
+# wal + covering index, once per process. see analytics.tune_db
+with sqlite3.connect(DB_PATH) as _conn:
+    analytics.tune_db(_conn)
+
 
 @contextmanager
 def db_conn():
 
-    conn = sqlite3.connect(DB_PATH)
+    # timeout so a request that lands mid-commit waits instead of 500ing
+    conn = sqlite3.connect(DB_PATH, timeout=15)
     try:
         yield conn
     finally:
@@ -239,6 +249,34 @@ def get_activity_heatmap(
         )
 
 
+# results only change when games do, so cache per user and key on a cheap
+# fingerprint of their games (count + newest end_time, both off the index).
+# a sync bumps the fingerprint and the next request recomputes.
+_RESULT_CACHE: dict[tuple, Any] = {}
+_RESULT_CACHE_MAX = 2000
+
+
+def games_stamp(conn, username):
+
+    row = conn.execute(
+        "SELECT COUNT(*), MAX(end_time) FROM games WHERE username = ?",
+        (username.lower(),),
+    ).fetchone()
+    return (row[0], row[1])
+
+
+def cached(key, compute):
+
+    if key in _RESULT_CACHE:
+        return _RESULT_CACHE[key]
+    value = compute()
+    if len(_RESULT_CACHE) >= _RESULT_CACHE_MAX:
+        # dicts keep insertion order, so this drops the oldest entry
+        _RESULT_CACHE.pop(next(iter(_RESULT_CACHE)))
+    _RESULT_CACHE[key] = value
+    return value
+
+
 @app.get("/api/users/{username}/summary")
 def get_summary(
     username: str,
@@ -249,7 +287,8 @@ def get_summary(
     # need to fan out into six parallel requests on first load
     with db_conn() as conn:
         assert_user_synced(conn, username)
-        return {
+        key = ("summary", username.lower(), tz_offset_hours, games_stamp(conn, username))
+        return cached(key, lambda: {
             "username": username.lower(),
             "record_by_color":           analytics.record_by_color(conn, username),
             "performance_by_time_class": analytics.performance_by_time_class(conn, username),
@@ -261,7 +300,7 @@ def get_summary(
             "performance_by_hour":       analytics.performance_by_hour(
                 conn, username, tz_offset_hours=tz_offset_hours
             ),
-        }
+        })
 
 
 @app.post("/api/users/{username}/sync")
@@ -574,6 +613,10 @@ def get_position(
             job = sync_jobs.start_index(username, DB_PATH)
             return {"status": "indexing", "done": job["done"], "total": job["total"]}
 
+        key = ("position", username.lower(), pos_key, color, time_class, games_stamp(conn, username))
+        if key in _RESULT_CACHE:
+            return _RESULT_CACHE[key]
+
         where, params = _position_filters(username, pos_key, color, time_class)
 
         # one row per game, not per ply - a threefold repetition would
@@ -631,7 +674,7 @@ def get_position(
     wins   = by_result.get("win", 0)
     draws  = by_result.get("draw", 0)
     losses = by_result.get("loss", 0)
-    return {
+    return cached(key, lambda: {
         "status":   "ready",
         "max_ply":  position_index.MAX_PLY,
         "games":    wins + draws + losses,
@@ -648,4 +691,4 @@ def get_position(
             "mine":   r[6],
         } for r in move_rows],
         "recent": recent,
-    }
+    })

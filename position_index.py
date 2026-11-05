@@ -205,9 +205,10 @@ def index_user(conn, username, on_progress=None):
 
         total_rows += index_game(conn, user, url, tc, wu, wr, br, pgn)
 
-        # commit every 500 games. one big transaction holds the lock too long,
-        # one-per-game is way too slow on windows.
-        if i % 500 == 0:
+        # commit every 200 games. big batches spill past sqlite's page cache
+        # and hold the write lock long enough to stall the api, one-per-game
+        # is way too slow on windows.
+        if i % 200 == 0:
             conn.commit()
             elapsed = time.time() - started
             rate = i / elapsed if elapsed else 0
@@ -225,7 +226,8 @@ def main():
 
     target_user = sys.argv[1] if len(sys.argv) > 1 else None
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    analytics.tune_db(conn)
     ensure_schema(conn)
 
     if target_user:
