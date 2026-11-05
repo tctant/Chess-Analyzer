@@ -4,7 +4,7 @@
 // cant blank the whole page.
 
 import { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, useNavigate, useParams, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useNavigate, useParams, useLocation, Navigate, NavLink, Link } from 'react-router-dom';
 
 import { fetchSummary }       from './api';
 import { MetricCards }        from './components/MetricCards';
@@ -18,6 +18,7 @@ import { GameLog }            from './components/GameLog';
 import { SyncButton }         from './components/SyncButton';
 import { ErrorBoundary }      from './components/ErrorBoundary';
 import { DashboardSkeleton }  from './components/DashboardSkeleton';
+import { PositionExplorer }   from './components/PositionExplorer';
 
 
 // the user whose data was pre-synced at build time. landing on the root
@@ -25,21 +26,30 @@ import { DashboardSkeleton }  from './components/DashboardSkeleton';
 var DEFAULT_USERNAME = 'MooMooTNT';
 
 
-function useTheme() {
+// board themes, same idea as chess.com / lichess board settings. the pick
+// also drives the accent color across the whole site so it doesnt feel
+// like a board pasted onto a generic dashboard.
+var BOARD_THEMES = [
+    { key: 'green', label: 'Green', light: '#ebecd0', dark: '#739552' },
+    { key: 'brown', label: 'Brown', light: '#f0d9b5', dark: '#b58863' },
+    { key: 'blue',  label: 'Blue',  light: '#dee3e6', dark: '#8ca2ad' }
+];
 
-    var [theme, setTheme] = useState(() => {
-        if (typeof window === 'undefined') { return 'light'; }
-        var stored = window.localStorage.getItem('theme');
-        if (stored === 'light' || stored === 'dark') { return stored; }
-        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+
+function useBoardTheme() {
+
+    var [board, setBoard] = useState(() => {
+        if (typeof window === 'undefined') { return 'green'; }
+        var stored = window.localStorage.getItem('board_theme');
+        return BOARD_THEMES.some(t => t.key === stored) ? stored : 'green';
     });
 
     useEffect(() => {
-        document.documentElement.dataset.theme = theme;
-        window.localStorage.setItem('theme', theme);
-    }, [theme]);
+        document.documentElement.dataset.board = board;
+        window.localStorage.setItem('board_theme', board);
+    }, [board]);
 
-    return [theme, () => setTheme(t => t === 'dark' ? 'light' : 'dark')];
+    return [board, setBoard];
 }
 
 
@@ -81,40 +91,23 @@ function tzLabel(mode) {
 }
 
 
-function SunIcon() {
+function BoardThemePicker({ value, onChange }) {
 
     return (
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-             strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="4"/>
-            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
-        </svg>
-    );
-}
-
-
-function MoonIcon() {
-
-    return (
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-             strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-        </svg>
-    );
-}
-
-
-function ThemeToggle({ theme, onToggle }) {
-
-    return (
-        <button
-            className="theme-toggle"
-            onClick={onToggle}
-            aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-        >
-            {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
-        </button>
+        <div className="board-picker" role="radiogroup" aria-label="Board theme">
+            {BOARD_THEMES.map(t => (
+                <button
+                    key={t.key}
+                    role="radio"
+                    aria-checked={value === t.key}
+                    className={value === t.key ? 'active' : ''}
+                    onClick={() => onChange(t.key)}
+                    title={`${t.label} board`}
+                >
+                    <span style={{ background: `linear-gradient(135deg, ${t.light} 50%, ${t.dark} 50%)` }} />
+                </button>
+            ))}
+        </div>
     );
 }
 
@@ -140,7 +133,7 @@ export default function App() {
     return (
         <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
             <Routes>
-                <Route path="/u/:username" element={<UserPage />} />
+                <Route path="/u/:username/*" element={<UserPage />} />
                 <Route path="/" element={<Navigate to={`/u/${DEFAULT_USERNAME}`} replace />} />
                 <Route path="*" element={<Navigate to={`/u/${DEFAULT_USERNAME}`} replace />} />
             </Routes>
@@ -153,8 +146,10 @@ function UserPage() {
 
     var { username }         = useParams();
     var navigate             = useNavigate();
-    var [theme, toggleTheme] = useTheme();
+    var location             = useLocation();
+    var [board, setBoard]    = useBoardTheme();
     var tz                   = useTimezone();
+    var view                 = location.pathname.endsWith('/explorer') ? 'explorer' : 'dashboard';
 
     var [input, setInput]     = useState(username);
     var [summary, setSummary] = useState(null);
@@ -181,7 +176,7 @@ function UserPage() {
         e.preventDefault();
         var trimmed = input.trim();
         if (trimmed && trimmed !== username) {
-            navigate(`/u/${trimmed}`);
+            navigate(view === 'explorer' ? `/u/${trimmed}/explorer` : `/u/${trimmed}`);
         }
     };
 
@@ -201,34 +196,54 @@ function UserPage() {
         : 0;
 
     return (
-        <div className="app">
-            <div className="app-header">
-                <div>
-                    <div className="eyebrow">Chess.com analytics</div>
-                    <h1>{summary ? username : 'Chess Analyzer'}</h1>
-                    {summary && (
-                        <div className="meta">{totalGames.toLocaleString()} games</div>
-                    )}
-                </div>
-                <div className="header-right">
+        <>
+        <header className="topbar">
+            <div className="topbar-inner">
+                <Link className="brand" to={`/u/${username}`}>
+                    <span className="brand-mark" aria-hidden="true">♞</span>
+                    Chess Analyzer
+                </Link>
+                <nav className="topnav">
+                    <NavLink to={`/u/${username}`} end>Dashboard</NavLink>
+                    <NavLink to={`/u/${username}/explorer`}>Position explorer</NavLink>
+                </nav>
+                <div className="topbar-right">
+                    <BoardThemePicker value={board} onChange={setBoard} />
                     <TimezoneToggle mode={tz.mode} onChange={tz.setMode} />
-                    <ThemeToggle theme={theme} onToggle={toggleTheme} />
                 </div>
             </div>
+        </header>
 
-            <form className="username-form" onSubmit={onSubmit}>
-                <input
-                    type="text"
-                    value={input}
-                    onChange={e => setInput(e.target.value)}
-                    placeholder="Chess.com username"
-                    autoComplete="off"
-                />
-                <button type="submit" disabled={loading || !input.trim()}>
-                    {loading ? 'Loading…' : 'Load'}
-                </button>
-                <SyncButton username={username} onComplete={onSyncComplete} />
-            </form>
+        <div className="app">
+            <div className="profile-row">
+                <div className="profile">
+                    <div className="profile-avatar" aria-hidden="true">
+                        {(username || '?')[0].toUpperCase()}
+                    </div>
+                    <div>
+                        <h1>{username}</h1>
+                        <div className="meta">
+                            {summary
+                                ? <>{totalGames.toLocaleString()} games · <a href={`https://www.chess.com/member/${username}`} target="_blank" rel="noreferrer">chess.com profile</a></>
+                                : loading ? 'Loading games…' : '\u00a0'}
+                        </div>
+                    </div>
+                </div>
+
+                <form className="username-form" onSubmit={onSubmit}>
+                    <input
+                        type="text"
+                        value={input}
+                        onChange={e => setInput(e.target.value)}
+                        placeholder="Chess.com username"
+                        autoComplete="off"
+                    />
+                    <button type="submit" disabled={loading || !input.trim()}>
+                        {loading ? 'Loading…' : 'Load'}
+                    </button>
+                    <SyncButton username={username} onComplete={onSyncComplete} />
+                </form>
+            </div>
 
             {error && (
                 <div className="status">
@@ -240,9 +255,15 @@ function UserPage() {
                 </div>
             )}
 
-            {!error && !summary && loading && <DashboardSkeleton />}
+            {view === 'explorer' && !error && summary && (
+                <ErrorBoundary label="Couldn't render position explorer">
+                    <PositionExplorer key={username} username={username} />
+                </ErrorBoundary>
+            )}
 
-            {!error && summary && (
+            {view === 'dashboard' && !error && !summary && loading && <DashboardSkeleton />}
+
+            {view === 'dashboard' && !error && summary && (
                 <div className="dashboard">
                     <ErrorBoundary label="Couldn't render summary cards">
                         <MetricCards summary={summary} />
@@ -312,6 +333,7 @@ function UserPage() {
                 </div>
             )}
         </div>
+        </>
     );
 }
 

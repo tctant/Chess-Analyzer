@@ -97,3 +97,15 @@ export function fetchGameByUrl(username, url) {
     var params = new URLSearchParams({ url });
     return fetchJson(`/api/users/${encodeURIComponent(username)}/games/by-url?${params}`);
 }
+
+
+// how often the user has reached a position, and what got played from it.
+// comes back { status: 'indexing', done, total } while the backend is still
+// building the index - the explorer page polls until it flips to 'ready'.
+export function fetchPosition(username, fen, { color = null, timeClass = null } = {}) {
+
+    var params = new URLSearchParams({ fen });
+    if (color)     { params.set('color', color); }
+    if (timeClass) { params.set('time_class', timeClass); }
+    return fetchJson(`/api/users/${encodeURIComponent(username)}/positions?${params}`);
+}
