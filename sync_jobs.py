@@ -14,6 +14,7 @@ import time
 import traceback
 
 import fetch_games
+import position_index
 
 
 # username -> job dict. state cycles through queued -> syncing -> done | error
@@ -77,6 +78,15 @@ def _run(username, db_path):
         conn = sqlite3.connect(db_path)
         try:
             fetch_games.sync_user(username, conn)
+
+            # keep the position explorer in step with new games. incremental,
+            # so after the first run this only touches what just came in
+            _set(username, message="Indexing positions")
+            position_index.index_user(
+                conn, username,
+                on_progress=lambda done, total: _set(
+                    username, message=f"Indexing positions {done:,}/{total:,}"),
+            )
             row = conn.execute(
                 "SELECT COUNT(*) FROM games WHERE username = ?", (username,)
             ).fetchone()
@@ -93,3 +103,50 @@ def _run(username, db_path):
         # log the trace to stderr so we can debug, surface a short message via the api
         traceback.print_exc()
         _set(username, state="error", error=str(e), message=f"Failed: {e}")
+
+
+# standalone index jobs, for when the explorer page finds games that never
+# went through a ui sync (cli sync, or a db built before v2 of the index)
+_INDEX_JOBS = {}
+
+
+def get_index_job(username):
+
+    user = username.lower()
+    with _LOCK:
+        return dict(_INDEX_JOBS[user]) if user in _INDEX_JOBS else None
+
+
+def start_index(username, db_path):
+
+    user = username.lower()
+    with _LOCK:
+        job = _INDEX_JOBS.get(user)
+        if job and job["state"] == "indexing":
+            return dict(job)
+        _INDEX_JOBS[user] = {"state": "indexing", "done": 0, "total": None, "error": None}
+
+    t = threading.Thread(target=_run_index, args=(user, db_path), daemon=True)
+    t.start()
+    return get_index_job(user)
+
+
+def _run_index(username, db_path):
+
+    def progress(done, total):
+
+        with _LOCK:
+            _INDEX_JOBS[username].update(done=done, total=total)
+
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            position_index.index_user(conn, username, on_progress=progress)
+        finally:
+            conn.close()
+        with _LOCK:
+            _INDEX_JOBS[username]["state"] = "done"
+    except Exception as e:
+        traceback.print_exc()
+        with _LOCK:
+            _INDEX_JOBS[username].update(state="error", error=str(e))

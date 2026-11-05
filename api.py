@@ -30,6 +30,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 import analytics
+import position_index
 import sync_jobs
 
 
@@ -408,11 +409,10 @@ def fetch_chessdb(fen):
 
 def fetch_personal(conn, username, fen):
 
-    user = username.lower()
-
-    # normalize fen the same way position_index does - drop halfmove + fullmove
-    parts   = fen.split(" ")
-    pos_key = " ".join(parts[:4])
+    user    = username.lower()
+    pos_key = position_index.key_from_fen(fen)
+    if pos_key is None:
+        raise HTTPException(status_code=400, detail="Invalid FEN")
 
     rows = conn.execute("""
         SELECT
@@ -424,7 +424,7 @@ def fetch_personal(conn, username, fen):
             COUNT(*) AS total,
             MAX(game_url) AS last_game_url
         FROM position_moves
-        WHERE username = ? AND position_fen = ?
+        WHERE username = ? AND position_fen = ? AND by_user = 1
         GROUP BY move_uci, move_san
         ORDER BY total DESC
     """, (user, pos_key)).fetchall()
@@ -450,12 +450,17 @@ def fetch_personal(conn, username, fen):
 
 def position_index_exists(conn):
 
-    # whether to even offer the personal tab. avoids confusing "0 games"
-    # responses when the index hasnt been built yet.
+    # whether to even offer the personal tab. a v1 index has the table but
+    # not the columns the queries need, so check the version too.
     row = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='position_moves'"
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='position_index_meta'"
     ).fetchone()
-    return row is not None
+    if row is None:
+        return False
+    row = conn.execute(
+        "SELECT value FROM position_index_meta WHERE key = 'version'"
+    ).fetchone()
+    return row is not None and int(row[0]) == position_index.INDEX_VERSION
 
 
 @app.get("/api/explorer/{db}")
@@ -511,7 +516,7 @@ def get_explorer_status(username: str) -> dict[str, Any]:
         has_index = position_index_exists(conn)
         if has_index:
             row = conn.execute(
-                "SELECT COUNT(*) FROM position_moves WHERE username = ?",
+                "SELECT COUNT(*) FROM position_moves WHERE username = ? AND by_user = 1",
                 (username.lower(),),
             ).fetchone()
             personal_rows = row[0] if row else 0
@@ -523,4 +528,124 @@ def get_explorer_status(username: str) -> dict[str, Any]:
         "personal_available": personal_rows > 0,
         "personal_rows":      personal_rows,
         "lichess_available":  False,
+    }
+
+
+# position explorer
+
+def _position_filters(username, pos_key, color, time_class):
+
+    where  = ["username = ?", "position_fen = ?"]
+    params = [username.lower(), pos_key]
+    if color in ("white", "black"):
+        where.append("user_color = ?")
+        params.append(color)
+    if time_class:
+        where.append("time_class = ?")
+        params.append(time_class)
+    return " AND ".join(where), params
+
+
+@app.get("/api/users/{username}/positions")
+def get_position(
+    username: str,
+    fen: str,
+    color: str | None = None,
+    time_class: str | None = None,
+) -> dict[str, Any]:
+
+    pos_key = position_index.key_from_fen(fen)
+    if pos_key is None:
+        raise HTTPException(status_code=400, detail="Invalid FEN")
+
+    with db_conn() as conn:
+        assert_user_synced(conn, username)
+
+        # build the index on first visit instead of making people run a script.
+        # a partial index would show wrong counts, so nothing comes back until
+        # the job finishes - the page polls this same endpoint.
+        job = sync_jobs.get_index_job(username)
+        if job and job["state"] == "indexing":
+            return {"status": "indexing", "done": job["done"], "total": job["total"]}
+
+        needs_index = (not position_index_exists(conn)
+                       or position_index.unindexed_count(conn, username) > 0)
+        if needs_index:
+            job = sync_jobs.start_index(username, DB_PATH)
+            return {"status": "indexing", "done": job["done"], "total": job["total"]}
+
+        where, params = _position_filters(username, pos_key, color, time_class)
+
+        # one row per game, not per ply - a threefold repetition would
+        # otherwise count the same game three times
+        result_rows = conn.execute(f"""
+            SELECT result, COUNT(*) FROM (
+                SELECT DISTINCT game_url, result FROM position_moves WHERE {where}
+            ) GROUP BY result
+        """, params).fetchall()
+        by_result = {r[0]: r[1] for r in result_rows}
+
+        move_rows = conn.execute(f"""
+            SELECT
+                move_uci,
+                move_san,
+                COUNT(*) AS games,
+                SUM(CASE WHEN result = 'win'  THEN 1 ELSE 0 END),
+                SUM(CASE WHEN result = 'draw' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END),
+                SUM(by_user)
+            FROM (
+                SELECT DISTINCT game_url, move_uci, move_san, result, by_user
+                FROM position_moves
+                WHERE {where} AND move_uci != ''
+            )
+            GROUP BY move_uci, move_san
+            ORDER BY games DESC
+        """, params).fetchall()
+
+        recent_rows = conn.execute(f"""
+            SELECT g.url, g.end_time, g.time_class, g.white_username, g.white_rating,
+                   g.black_username, g.black_rating, h.result, h.user_color
+            FROM (
+                SELECT DISTINCT game_url, result, user_color FROM position_moves WHERE {where}
+            ) h
+            JOIN games g ON g.url = h.game_url
+            ORDER BY g.end_time DESC
+            LIMIT 8
+        """, params).fetchall()
+
+    recent = []
+    for r in recent_rows:
+
+        is_white = r[8] == "white"
+        recent.append({
+            "url":        r[0],
+            "end_time":   r[1],
+            "time_class": r[2],
+            "opponent":   r[5] if is_white else r[3],
+            "opp_rating": r[6] if is_white else r[4],
+            "my_color":   r[8],
+            "result":     r[7],
+        })
+
+    wins   = by_result.get("win", 0)
+    draws  = by_result.get("draw", 0)
+    losses = by_result.get("loss", 0)
+    return {
+        "status":   "ready",
+        "max_ply":  position_index.MAX_PLY,
+        "games":    wins + draws + losses,
+        "wins":     wins,
+        "draws":    draws,
+        "losses":   losses,
+        "moves": [{
+            "uci":    r[0],
+            "san":    r[1],
+            "games":  r[2],
+            "wins":   r[3],
+            "draws":  r[4],
+            "losses": r[5],
+            "mine":   r[6],
+        } for r in move_rows],
+        "recent": recent,
     }

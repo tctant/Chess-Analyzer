@@ -16,6 +16,8 @@ Type a Chess.com username and you get:
 - Win rate by hour of day. The "do I actually play worse after midnight" question
 - Activity heatmap (day-of-week × hour) with all-time / year / month / week filters
 - Searchable game log with filters for opponent, color, result, time class
+- Position explorer: a board you move pieces around on, and for every position it shows how many of your games reached it, your W/D/L from there, what you (and your opponents) played next, and the most recent games from that position. Filter by color and time control, and the line is kept in the url so positions are linkable
+- Board themes (green / brown / blue) that also set the accent color for the whole site
 - Click any game and you get a Stockfish-powered analyzer with eval bar, move list with per-move clock readings, an opening explorer (engine analysis from chessdb.cn), and a "play from here" sandbox
 
 If the username isn't in the database yet, hit the Sync button and it'll pull every game from Chess.com's public API. Most accounts take a couple minutes the first time, then incremental sync after that.
@@ -67,7 +69,7 @@ The plan was to load Stockfish 16 lite as a Web Worker. Turns out Workers can on
 The board renders into a div, but its internal wrappers don't inherit container dimensions cleanly. If you don't force `width: 100%; height: 100%` on the right nested elements, the board collapses to 0×0 in a flex container and you spend an hour wondering why the pieces are invisible. There's CSS in styles.css specifically for this.
 
 **Personal opening explorer needed its own index.**
-For the "what have I played from this position" tab, querying live by replaying every game's PGN was way too slow (~9000 games × full mainline replay every time someone clicked an explorer move). So `position_index.py` builds a `position_moves` table once: every position the user has played from, every move they made from there, and the result of that game. With the right index it's a single GROUP BY. The indexer is idempotent and tracks indexed games by URL so re-runs only process new games.
+For the "what have I played from this position" tab, querying live by replaying every game's PGN was way too slow (~9000 games × full mainline replay every time someone clicked an explorer move). So `position_index.py` builds a `position_moves` table once: one row per ply for the first 25 moves of every game (both sides' moves, plus the final position if the game ended early), with the user's color and the result. With the right index it's a single GROUP BY. Counts are per game, not per ply, so a threefold repetition doesn't triple-count. The indexer is idempotent, tracks indexed games by URL, and runs automatically after every sync. If the explorer page finds unindexed games (cli sync, or an old v1 index) it builds the index in a background thread and the page polls until it's done.
 
 **Timezone bug in the heatmap.**
 Initially the heatmap used the server's local time, which meant if you moved the backend it would suddenly show different hours. Fixed by passing `tz_offset_hours` from the frontend (defaulting to 0 = UTC, with a comment in the analytics that explains the `tz_offset_hours=-7` for Phoenix case). The since_days filter computes the cutoff in unix seconds so timezone doesn't affect which games are included, only how the included games get bucketed for display.
@@ -112,6 +114,7 @@ chess/
             ├── SyncButton.jsx
             ├── AnalysisBoard.jsx
             ├── OpeningExplorer.jsx
+            ├── PositionExplorer.jsx
             ├── useStockfish.js
             ├── ErrorBoundary.jsx
             └── DashboardSkeleton.jsx
